@@ -6,16 +6,9 @@ from typing import Optional
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
-# 接続URLは st.secrets["DATABASE_URL"] で読み込む（PostgreSQL/Supabase用, GitHubに上げてもパスワードが公開されない）
+# 接続URLは st.secrets["DATABASE_URL"] で読み込む（PostgreSQL/Supabase用。GitHubに上げてもパスワードが公開されない）
 def _get_database_url() -> str:
-    try:
-        url = st.secrets["DATABASE_URL"]
-    except (KeyError, FileNotFoundError):
-        raise RuntimeError(
-            "StreamlitのSecretsに DATABASE_URL を設定してください。"
-            " Streamlit Cloud の Secrets または .streamlit/secrets.toml に DATABASE_URL を追加してください。"
-        )
-    # 環境によって 'postgres://' で始まることがあるので、'postgresql://' に変換
+    url = st.secrets["DATABASE_URL"]  # KeyError が発生した場合は起動時の try-except で捕捉して表示
     if isinstance(url, str) and url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     return url
@@ -64,7 +57,8 @@ def get_time_options():
             options.append(f"{h:02d}:30")
     return options
 
-# PostgreSQL用テーブル作成・接続
+# PostgreSQL用テーブル作成（Supabase/Streamlit Cloud 対応）
+# employees, availability, demand, demand_templates が存在しない場合に自動作成する
 def init_db():
     conn = get_conn()
     try:
@@ -497,4 +491,39 @@ def get_demand_arrays(date_str: str):
             min_c[idx], target_c[idx], max_c[idx] = a, b, c
     return min_c, target_c, max_c
 
-# あとはそのまま（CP-SAT, UI部分）…
+# ---------- 起動時: テーブル自動作成・クリーニング・エラーハンドリング ----------
+TIME_OPTIONS = get_time_options()
+
+try:
+    init_db()
+    if st.session_state.get("_avail_cleanup_done") is not True:
+        dup_d, inv_d = cleanup_availability_data()
+        if dup_d or inv_d:
+            st.toast(f"希望シフトデータを整理しました（重複 {dup_d} 件・不正 {inv_d} 件削除）", icon="🧹")
+        st.session_state._avail_cleanup_done = True
+except KeyError:
+    st.error("**DATABASE_URL が設定されていません。**")
+    st.markdown(
+        "Streamlit Cloud の場合は **Settings → Secrets** に、ローカルの場合は `.streamlit/secrets.toml` に、"
+        "次の形式で `DATABASE_URL` を追加してください。"
+    )
+    st.code('DATABASE_URL = "postgresql://user:password@host:5432/dbname"', language="toml")
+    st.stop()
+except FileNotFoundError:
+    st.error("**Secrets ファイルが見つかりません。**")
+    st.markdown("`.streamlit/secrets.toml` を用意するか、Streamlit Cloud の Secrets で `DATABASE_URL` を設定してください。")
+    st.stop()
+except Exception as e:
+    err_type = type(e).__name__
+    err_msg = str(e).lower()
+    st.error(f"**データベース接続に失敗しました**（{err_type}）")
+    if "password" in err_msg or "authentication" in err_msg or "pg_auth" in err_msg:
+        st.warning("原因の可能性: **パスワードまたはユーザー名の誤り**。Supabase の接続文字列を再確認してください。")
+    elif "connection" in err_msg or "refused" in err_msg or "could not connect" in err_msg:
+        st.warning("原因の可能性: **ホスト名・ポートの誤り、またはネットワーク／ファイアウォール**。接続先が正しいか確認してください。")
+    elif "does not exist" in err_msg or "database" in err_msg:
+        st.warning("原因の可能性: **データベース名の誤り**。Supabase の Connection string を確認してください。")
+    else:
+        st.warning(f"詳細: {e}")
+    st.code(str(e), language=None)
+    st.stop()
