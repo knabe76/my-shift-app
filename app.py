@@ -565,7 +565,3 @@ elif menu == "シフト確認（カレンダー）":
             st.table(avail_list)
     else:
         st.write("登録されたシフトはまだありません。")
-🚀 画面を出すための 3 ステップ
-Cursorで追記して保存: 上のコードを app.py の一番最後に貼り付けて、Ctrl + S で保存します。
-
-GitHubにアップロード: 保存した app.py を再度 GitHub へアップロード（上書き）してください。
