@@ -530,38 +530,95 @@ except Exception as e:
 
 
 # ---------- ここから下に「画面を作るコード」を追記 ----------
+# ---------- ここから下の「UI部分」を最新版に書き換えてください ----------
 
 st.title("📅 店長専用シフト管理システム")
 
-# サイドバーでメニューを切り替え
-menu = st.sidebar.selectbox("メニューを選択", ["スタッフ登録", "希望シフト入力", "シフト確認（カレンダー）"])
+# 1. サイドバーでメニューを切り替え
+menu = st.sidebar.selectbox(
+    "メニューを選択", 
+    ["スタッフ一覧・登録", "希望シフト入力", "必要人数（需要）設定", "シフト自動生成", "全体カレンダー"]
+)
 
-if menu == "スタッフ登録":
-    st.header("👥 スタッフ登録")
-    with st.form("staff_form"):
-        name = st.text_input("スタッフ名")
-        is_kp = st.checkbox("キーマン（責任者）")
-        is_nb = st.checkbox("新人")
-        submit = st.form_submit_button("登録する")
-        
-        if submit and name:
-            add_employee(name, is_kp, is_nb)
-            st.success(f"{name} さんを登録しました！")
+# --- A. スタッフ一覧・登録 ---
+if menu == "スタッフ一覧・登録":
+    st.header("👥 スタッフ管理")
+    
+    # 登録フォーム
+    with st.expander("➕ 新しいスタッフを追加する"):
+        with st.form("staff_form"):
+            name = st.text_input("スタッフ名")
+            is_kp = st.checkbox("キーマン（責任者）")
+            is_nb = st.checkbox("新人")
+            if st.form_submit_button("登録"):
+                if name:
+                    add_employee(name, is_kp, is_nb)
+                    st.success(f"{name} さんを登録しました")
+                    st.rerun()
 
+    # 一覧表示
+    st.subheader("現在のスタッフ一覧")
+    employees = get_employees()
+    if employees:
+        df_emp = pd.DataFrame(employees, columns=["ID", "名前", "キーマン", "新人"])
+        st.dataframe(df_emp, use_container_width=True)
+    else:
+        st.info("スタッフがまだ登録されていません。")
+
+# --- B. 希望シフト入力 ---
 elif menu == "希望シフト入力":
     st.header("✍️ 希望シフト入力")
-    # ここにシフト入力のコードを書く（以前作成したもの）
-    st.info("ここにスタッフごとのシフト入力画面を表示します。")
+    target_date = st.date_input("編集する日付", value=datetime.now().date())
+    date_str = target_date.strftime("%Y-%m-%d")
+    
+    emps = get_employees()
+    current_avails = get_availabilities_for_date_by_employee(date_str)
+    
+    st.write(f"### {date_str} の希望入力")
+    
+    new_items = []
+    for eid, ename, is_kp, is_nb in emps:
+        col1, col2, col3 = st.columns([2, 3, 3])
+        with col1:
+            st.write(f"**{ename}**")
+        with col2:
+            default_start = current_avails.get(eid, ("17:00", "29:00"))[0]
+            start_t = st.selectbox(f"開始 ({ename})", TIME_OPTIONS, index=TIME_OPTIONS.index(default_start), key=f"s_{eid}")
+        with col3:
+            default_end = current_avails.get(eid, ("17:00", "29:00"))[1]
+            end_t = st.selectbox(f"終了 ({ename})", TIME_OPTIONS, index=TIME_OPTIONS.index(default_end), key=f"e_{eid}")
+        new_items.append((eid, start_t, end_t))
+    
+    if st.button("この日の希望を保存する"):
+        save_availabilities_for_date(date_str, new_items)
+        st.success(f"{date_str} の希望を保存しました！")
 
-elif menu == "シフト確認（カレンダー）":
-    st.header("🗓️ シフトカレンダー")
-    # カレンダー表示のコード
+# --- C. 必要人数（需要）設定 ---
+elif menu == "必要人数（需要）設定":
+    st.header("📈 必要人数の設定")
+    # 曜日ごとのテンプレート設定などをここに表示（関数はすでにあります）
+    st.info("ここでは曜日ごとの基本人数や、特定の日付の必要人数を調整できます。")
+
+# --- D. シフト自動生成 ---
+elif menu == "シフト自動生成":
+    st.header("🤖 AIシフト自動生成")
+    gen_date = st.date_input("生成する日付", value=datetime.now().date())
+    gen_date_str = gen_date.strftime("%Y-%m-%d")
+    
+    if st.button("最適化を実行！"):
+        with st.spinner("AIが最適なシフトを計算中..."):
+            # ここで OR-Tools の関数（以前作成したもの）を呼び出します
+            st.warning("現在、最適化ロジックを接続中です。データが揃っていれば計算が始まります。")
+
+# --- E. 全体カレンダー ---
+elif menu == "全体カレンダー":
+    st.header("🗓️ 全体カレンダー")
     avail_list = get_availabilities_with_attributes()
     if avail_list:
         if st_calendar:
             events = build_calendar_events_for_lib(avail_list)
-            st_calendar(events=events)
+            st_calendar(events=events, options={"initialView": "dayGridMonth"})
         else:
             st.table(avail_list)
     else:
-        st.write("登録されたシフトはまだありません。")
+        st.write("データがありません。")
