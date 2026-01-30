@@ -1,28 +1,39 @@
 import streamlit as st
-import psycopg2
 import time
 import pandas as pd
 from datetime import datetime, timedelta
+from typing import Optional
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+
+# 接続URLは st.secrets["DATABASE_URL"] で読み込む（GitHubに上げてもパスワードが公開されない）
+def _get_database_url() -> str:
+    try:
+        url = st.secrets["DATABASE_URL"]
+    except (KeyError, FileNotFoundError):
+        raise RuntimeError(
+            "StreamlitのSecretsに DATABASE_URL を設定してください。"
+            " Streamlit Cloud の Secrets または .streamlit/secrets.toml に DATABASE_URL を追加してください。"
+        )
+    if isinstance(url, str) and url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+_engine: Optional[Engine] = None
+
+
+def get_engine() -> Engine:
+    """SQLAlchemy エンジンを返す（st.secrets['DATABASE_URL'] から作成）。"""
+    global _engine
+    if _engine is None:
+        _engine = create_engine(_get_database_url(), pool_pre_ping=True)
+    return _engine
 
 
 def get_conn():
-    """Streamlit Secrets から Supabase（PostgreSQL）接続情報を読み、接続を返す。"""
-    s = st.secrets.get("supabase") or st.secrets.get("postgres")
-    if not s:
-        raise RuntimeError(
-            "StreamlitのSecretsに supabase または postgres の接続情報を設定してください。"
-            " .streamlit/secrets.toml に host, port, dbname, user, password または database_url を追加してください。"
-        )
-    url = s.get("database_url")
-    if url:
-        return psycopg2.connect(url)
-    return psycopg2.connect(
-        host=s["host"],
-        port=int(s.get("port", 5432)),
-        dbname=s.get("dbname") or s.get("database", "postgres"),
-        user=s["user"],
-        password=s["password"],
-    )
+    """PostgreSQL 接続を返す（psycopg2 互換。SQLAlchemy 経由で st.secrets['DATABASE_URL'] を使用）。"""
+    return get_engine().raw_connection()
 
 try:
     from streamlit_calendar import calendar as st_calendar
@@ -56,6 +67,7 @@ def get_time_options():
     return options
 
 # データベース接続とテーブル作成（PostgreSQL / Supabase）
+# アプリ起動時に employees, availability, demand, demand_templates がなければ自動作成する
 def init_db():
     conn = get_conn()
     try:
@@ -829,12 +841,17 @@ def build_gantt_figure(assign_matrix, staff_list, time_options):
     return fig
 
 # 初期化（DB作成 → 希望シフトの重複・不正データを1回だけクリーニング）
-init_db()
-if st.session_state.get("_avail_cleanup_done") is not True:
-    dup_d, inv_d = cleanup_availability_data()
-    if dup_d or inv_d:
-        st.toast(f"希望シフトデータを整理しました（重複 {dup_d} 件・不正 {inv_d} 件削除）", icon="🧹")
-    st.session_state._avail_cleanup_done = True
+try:
+    init_db()
+    if st.session_state.get("_avail_cleanup_done") is not True:
+        dup_d, inv_d = cleanup_availability_data()
+        if dup_d or inv_d:
+            st.toast(f"希望シフトデータを整理しました（重複 {dup_d} 件・不正 {inv_d} 件削除）", icon="🧹")
+        st.session_state._avail_cleanup_done = True
+except Exception as e:
+    st.error(f"データベース接続に失敗しました: {e}")
+    st.info("Streamlit の Secrets に **DATABASE_URL**（PostgreSQL 接続URL）を設定してください。Streamlit Cloud の場合はダッシュボードの Secrets、ローカルでは `.streamlit/secrets.toml` に `DATABASE_URL` を追加してください。")
+    st.stop()
 TIME_OPTIONS = get_time_options()
 
 # サイドバー: アプリ全体の共通設定
